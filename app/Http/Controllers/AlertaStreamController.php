@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Alert;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -20,36 +21,41 @@ class AlertaStreamController extends Controller
             // 1. Desactivar el límite de tiempo de ejecución de PHP para esta petición
             set_time_limit(0);
 
-            // Mensaje inicial de bienvenida
-            echo "data: {\"status\": \"connected\", \"message\": \"Laboratorio de alertas activado\"}\n\n";
-            if (ob_get_level() > 0) {
-                ob_flush();
-            }
+            // 1. Inicialización del puntero
+            // Al conectar, el usuario solo escuchará las alertas que se creen a partir de este momento.
+            $lastEventId = Alert::max('id') ?? 0;
+
+            echo "event: conecta\n";
+            echo "data: {\"message\": \"sintonizado con PostgresSQL con puntero inicial ID: {$lastEventId}\"}\n\n";
+
+            if (ob_get_level() > 0) ob_flush();
             flush();
 
-            // 2. El bucle de vida de la conexión.
             while (true) {
-
-            // 3. Salvaguarda crítica: ¿El usuario cerró la pestaña?
                 if (connection_aborted()) {
-                    // Aqui podriamos meter un log si quisieramos
                     break;
                 }
 
-                // 4. Estructura del Protocolo SSE (Simulación de alerta)
-                // Nota: Más adelante buscaremos alertas reales en la Base de Datos.
-                $timestamp = now()->toTimeString();
-                echo "event: alert\n";
-                echo "data: {\"status\": \"live\", \"message\": \"Latido de telemetria a las {$timestamp} \"} \n\n";
+                $alertasNuevas = Alert::where('id', '>', $lastEventId)
+                    ->orderBy('id', 'asc')
+                    ->get();
 
-                // 5. Forzar el envío inmediato de los bytes recopilados en este ciclo
-                if (ob_get_level() > 0) {
-                    ob_flush();
+                if ($alertasNuevas->isNotEmpty()) {
+                    foreach ($alertasNuevas as $alerta) {
+                        echo "event: alert\n";
+                        echo "data: " . json_encode([
+                            'id' => $alerta->id,
+                            'message' => $alerta->message,
+                            'tipo' => $alerta->tipo,
+                            'timestamp' => $alerta->created_at->toTimeString()
+                        ]) . "\n\n";
+
+                        $lastEventId = $alerta->id;
+                    }
+                    if(ob_get_level() > 0) ob_flush();
+                    flush();
                 }
-                flush();
-
-                // 6. Protección de CPU: Pausa del hilo por 3 segundos antes de la siguiente vuelta
-                sleep(3);
+                sleep(2);
             }
         }, 200, $headers);
     }
