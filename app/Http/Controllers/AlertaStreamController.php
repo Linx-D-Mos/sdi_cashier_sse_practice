@@ -8,7 +8,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AlertaStreamController extends Controller
 {
-    public function stream(): StreamedResponse
+    public function stream(Request $request): StreamedResponse
     {
         $headers = [
             'Content-Type' => 'text/event-stream',
@@ -17,16 +17,27 @@ class AlertaStreamController extends Controller
             'X-Accel-Buffering' => 'no',
         ];
 
-        return response()->stream(function () {
+        return response()->stream(function () use ($request) {
             // 1. Desactivar el límite de tiempo de ejecución de PHP para esta petición
             set_time_limit(0);
 
-            // 1. Inicialización del puntero
-            // Al conectar, el usuario solo escuchará las alertas que se creen a partir de este momento.
-            $lastEventId = Alert::max('id') ?? 0;
+            // 1. Restricción de resilencia: ¿El navegador viene de una reconexión?
+            // El navegador envía 'Last-Event-ID'. Si no existe, buscamos la cabecera común por si acaso.
+
+            $lastEventId = $request->header('Last-Event-ID')
+                ?? $request->server('HTTP_LAST_EVENT_ID')
+                ?? null;
+
+            if (is_null($lastEventId)) {
+                $lastEventId = Alert::max('id') ?? 0;
+                $contexto = "Conexión Limpia inicializada en ID: {$lastEventId}";
+            } else {
+                $lastEventId = Alert::max('id') ?? 0;
+                $contexto = "Reconexión exitosa. Recuperando datos desde el ID: {$lastEventId}";
+            }
 
             echo "event: conecta\n";
-            echo "data: {\"message\": \"sintonizado con PostgresSQL con puntero inicial ID: {$lastEventId}\"}\n\n";
+            echo "data: " . json_encode(["message" => $contexto]) . "\n\n";
 
             if (ob_get_level() > 0) ob_flush();
             flush();
@@ -52,7 +63,7 @@ class AlertaStreamController extends Controller
 
                         $lastEventId = $alerta->id;
                     }
-                    if(ob_get_level() > 0) ob_flush();
+                    if (ob_get_level() > 0) ob_flush();
                     flush();
                 }
                 sleep(2);
